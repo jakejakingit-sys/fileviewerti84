@@ -17,7 +17,7 @@
 enum { C_BG=248, C_PANEL=249, C_LINE=250, C_TEXT=251, C_DIM=252, C_ACCENT=253, C_WARN=254, C_WHITE=255 };
 enum { TAB_TEXT, TAB_IMAGE, TAB_GIF };
 enum { VIEW_LIST, VIEW_TEXT, VIEW_IMAGE, VIEW_GIF, VIEW_INFO };
-typedef struct { char name[9]; uint8_t type, kind; } Item;
+typedef struct { char name[9]; uint8_t type, kind; void *data; } Item;
 
 static Item items[MAX_ITEMS];
 static unsigned item_count, selected, scroll;
@@ -50,22 +50,28 @@ static int item_kind_for(uint8_t type,const char *name){
 }
 
 static void scan_items(void){
-  void *pos=NULL; uint8_t type; char *name;
+  void *entry=os_GetSymTablePtr(), *data; uint24_t raw_type,name_len; char found[16];
   item_count=0; selected=scroll=0;
-  while(item_count<MAX_ITEMS && (name=ti_DetectAny(&pos,NULL,&type))!=NULL){
-    int kind=item_kind_for(type,name);
-    if(!kind || strcmp(name,"FILEVIEW")==0) continue;
+  while(item_count<MAX_ITEMS && (entry=os_NextSymEntry(entry,&raw_type,&name_len,found,&data))!=NULL){
+    if(!name_len || name_len>8) continue;
+    found[name_len]=0;
+    /* The symbol table also contains OS-reserved entries whose names start
+       below 'A'; ignore those just like CEdev's variable-browser example. */
+    if(found[0]<'A')continue;
+    uint8_t type=(uint8_t)raw_type;
+    int kind=item_kind_for(type,found);
+    if(!kind || strcmp(found,"FILEVIEW")==0) continue;
     if(tab==TAB_TEXT && kind==2){
-      uint8_t slot=ti_OpenVar(name,"r",OS_TYPE_APPVAR); if(!slot)continue;
+      uint8_t slot=ti_OpenVar(found,"r",OS_TYPE_APPVAR); if(!slot)continue;
       uint8_t *p=(uint8_t*)ti_GetDataPtr(slot); uint16_t n=ti_GetSize(slot);
       bool ok=n>=4 && p && memcmp(p,"FVTX",4)==0; ti_Close(slot); if(!ok)continue;
     }
     if(tab==TAB_GIF){
-      uint8_t slot=ti_OpenVar(name,"r",OS_TYPE_APPVAR); if(!slot)continue;
+      uint8_t slot=ti_OpenVar(found,"r",OS_TYPE_APPVAR); if(!slot)continue;
       uint8_t *p=(uint8_t*)ti_GetDataPtr(slot); uint16_t n=ti_GetSize(slot);
       bool ok=n>=10 && p && memcmp(p,"FVGF",4)==0; ti_Close(slot); if(!ok)continue;
     }
-    Item *it=&items[item_count++]; strncpy(it->name,name,8); it->name[8]=0; it->type=type; it->kind=(uint8_t)kind;
+    Item *it=&items[item_count++]; strncpy(it->name,found,8); it->name[8]=0; it->type=type; it->kind=(uint8_t)kind; it->data=data;
   }
 }
 
@@ -94,10 +100,11 @@ static void load_text(Item *it){
 }
 
 static void open_image(Item *it){
-  uint8_t slot=ti_OpenVar(it->name,"r",it->type);
-  if(!slot){set_message("CANNOT OPEN IMAGE");view=VIEW_INFO;return;}
-  image_data=(uint8_t*)ti_GetDataPtr(slot);image_size=ti_GetSize(slot);
-  strncpy(opened_name,it->name,8);opened_name[8]=0;ti_Close(slot);view=VIEW_IMAGE;
+  /* Image Vars are OS variables, not AppVars/programs, so fileioc slots are
+     not the right reader. os_NextSymEntry supplied their archived data ptr. */
+  image_data=(uint8_t*)it->data;image_size=(uint16_t)(83u*133u*2u);
+  if(!image_data){set_message("CANNOT OPEN IMAGE");view=VIEW_INFO;return;}
+  strncpy(opened_name,it->name,8);opened_name[8]=0;view=VIEW_IMAGE;
 }
 
 static void open_gif(Item *it){
