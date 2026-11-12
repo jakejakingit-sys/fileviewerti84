@@ -41,11 +41,11 @@ static void set_message(const char*s){strncpy(message,s,sizeof(message)-1);messa
 
 static int item_kind_for(uint8_t type,const char *name){
   if(tab==TAB_TEXT){
-    if(type==OS_TYPE_STR || type==TI_PRGM_TYPE || type==TI_PPRGM_TYPE || type==TI_TPRGM_TYPE) return 1;
-    if(type==TI_APPVAR_TYPE) return 2;
+    if(type==OS_TYPE_STR || type==OS_TYPE_PRGM || type==OS_TYPE_PROT_PRGM || type==OS_TYPE_TMP_PRGM) return 1;
+    if(type==OS_TYPE_APPVAR) return 2;
   } else if(tab==TAB_IMAGE){
     if(type==OS_TYPE_PIC || type==OS_TYPE_IMAGE) return 3;
-  } else if(tab==TAB_GIF && type==TI_APPVAR_TYPE) return 4;
+  } else if(tab==TAB_GIF && type==OS_TYPE_APPVAR) return 4;
   (void)name; return 0;
 }
 
@@ -56,12 +56,12 @@ static void scan_items(void){
     int kind=item_kind_for(type,name);
     if(!kind || strcmp(name,"FILEVIEW")==0) continue;
     if(tab==TAB_TEXT && kind==2){
-      uint8_t slot=ti_OpenVar(name,"r",TI_APPVAR_TYPE); if(!slot)continue;
+      uint8_t slot=ti_OpenVar(name,"r",OS_TYPE_APPVAR); if(!slot)continue;
       uint8_t *p=(uint8_t*)ti_GetDataPtr(slot); uint16_t n=ti_GetSize(slot);
       bool ok=n>=4 && p && memcmp(p,"FVTX",4)==0; ti_Close(slot); if(!ok)continue;
     }
     if(tab==TAB_GIF){
-      uint8_t slot=ti_OpenVar(name,"r",TI_APPVAR_TYPE); if(!slot)continue;
+      uint8_t slot=ti_OpenVar(name,"r",OS_TYPE_APPVAR); if(!slot)continue;
       uint8_t *p=(uint8_t*)ti_GetDataPtr(slot); uint16_t n=ti_GetSize(slot);
       bool ok=n>=10 && p && memcmp(p,"FVGF",4)==0; ti_Close(slot); if(!ok)continue;
     }
@@ -101,7 +101,7 @@ static void open_image(Item *it){
 }
 
 static void open_gif(Item *it){
-  uint8_t slot=ti_OpenVar(it->name,"r",TI_APPVAR_TYPE);
+  uint8_t slot=ti_OpenVar(it->name,"r",OS_TYPE_APPVAR);
   if(!slot){set_message("CANNOT OPEN ANIMATION");view=VIEW_INFO;return;}
   uint8_t *p=(uint8_t*)ti_GetDataPtr(slot);uint16_t n=ti_GetSize(slot);
   if(!p||n<10||memcmp(p,"FVGF",4)){ti_Close(slot);set_message("BAD FRAME PACK");view=VIEW_INFO;return;}
@@ -164,13 +164,13 @@ static void draw_image_view(void){
     for(int y=0;y<83;y++)for(int x=0;x<133;x++){
       uint16_t v=pixels[y*133+x];uint8_t r=(v>>11)&31,g=(v>>5)&63,b=v&31;
       uint8_t index=(uint8_t)(((r>>2)<<5)|((g>>3)<<2)|(b>>3));
-      gfx_SetPixel(index,ox+x,oy+y);
+      gfx_SetColor(index);gfx_SetPixel(ox+x,oy+y);
     }
   }else if(image_data&&image_size>=10&&memcmp(image_data,"FVIM",4)==0){
     int w=image_data[4],h=image_data[5];unsigned need=(unsigned)w*h;
     if(w&&h&&w<=120&&h<=100&&image_size>=need+6){
       int ox=(320-w)/2,oy=75+(100-h)/2;
-      for(int y=0;y<h;y++)for(int x=0;x<w;x++)gfx_SetPixel(image_data[6+y*w+x],ox+x,oy+y);
+      for(int y=0;y<h;y++)for(int x=0;x<w;x++){gfx_SetColor(image_data[6+y*w+x]);gfx_SetPixel(ox+x,oy+y);}
     }else text("INVALID FVIM IMAGE",82,128,C_WARN);
   }else{
     text("TI PICTURE FOUND",98,104,C_ACCENT);
@@ -185,8 +185,8 @@ static void draw_gif_view(void){
   background();text(opened_name,12,39,C_ACCENT);text("LEFT/RIGHT FRAME   CLEAR BACK",120,39,C_DIM);
   frame(20,62,280,142,C_LINE);
   uint8_t *frame_data=gif_data+(unsigned)gif_frame*gif_w*gif_h;int ox=(320-gif_w)/2,oy=77+(100-gif_h)/2;
-  for(int y=0;y<gif_h;y++)for(int x=0;x<gif_w;x++)gfx_SetPixel(frame_data[y*gif_w+x],ox+x,oy+y);
-  gfx_SetColor(C_ACCENT);gfx_HLine(ox,oy+gif_h+3,gif_w);
+  for(int y=0;y<gif_h;y++)for(int x=0;x<gif_w;x++){gfx_SetColor(frame_data[y*gif_w+x]);gfx_SetPixel(ox+x,oy+y);}
+  gfx_SetColor(C_ACCENT);gfx_Line(ox,oy+gif_h+3,ox+gif_w-1,oy+gif_h+3);
   text("FRAME",20,218,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(68,218);gfx_PrintUInt(gif_frame+1,1);
   text("/",83,218,C_DIM);gfx_SetTextXY(91,218);gfx_PrintUInt(gif_n,1);
 }
@@ -215,7 +215,7 @@ static void update(void){
 }
 
 int main(void){
-  ti_CloseAll();gfx_Begin();gfx_SetDrawBuffer();gfx_SetTextScale(1,1);
+  gfx_Begin();gfx_SetDrawBuffer();gfx_SetTextScale(1,1);
   uint16_t palette[256];
   for(unsigned i=0;i<256;i++){
     unsigned r=(i>>5)&7,g=(i>>2)&7,b=i&3;
