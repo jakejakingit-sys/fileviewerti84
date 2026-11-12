@@ -31,6 +31,9 @@ static uint8_t gif_w,gif_h,gif_n,gif_delay;
 static uint8_t *gif_data;
 static uint16_t gif_size;
 static char opened_name[9];
+static unsigned debug_direct_hits,debug_name_hits,debug_symbols;
+static char debug_last_name[9];
+static uint8_t debug_last_type;
 static bool last_up,last_down,last_left,last_right,last_enter,last_clear;
 static bool running=true;
 
@@ -67,6 +70,7 @@ static bool item_name_exists(const char *name){
 static void scan_items(void){
   void *entry=os_GetSymTablePtr(), *data; uint24_t raw_type,name_len; char found[16];
   item_count=0; selected=scroll=0;
+  debug_direct_hits=debug_name_hits=debug_symbols=0;debug_last_name[0]=0;debug_last_type=0;
   /* TI Connect creates Image Vars in the fixed Image0..Image9 slots. Look
      these up by their OS type and exact name instead of relying on VAT order;
      archived Image Vars are returned by os_ChkFindSym as data pointers. */
@@ -75,18 +79,22 @@ static void scan_items(void){
     static const char *const pic_names[10]={"Pic0","Pic1","Pic2","Pic3","Pic4","Pic5","Pic6","Pic7","Pic8","Pic9"};
     for(unsigned i=0;i<10 && item_count<MAX_ITEMS;i++){
       if(os_ChkFindSym(OS_TYPE_IMAGE,image_names[i],NULL,&data)){
-        Item *it=&items[item_count++];strncpy(it->name,image_names[i],8);it->type=OS_TYPE_IMAGE;it->kind=3;it->data=data;
+        debug_direct_hits++;Item *it=&items[item_count++];strncpy(it->name,image_names[i],8);it->type=OS_TYPE_IMAGE;it->kind=3;it->data=data;
       }
       if(os_ChkFindSym(OS_TYPE_PIC,pic_names[i],NULL,&data)){
-        Item *it=&items[item_count++];strncpy(it->name,pic_names[i],8);it->type=OS_TYPE_PIC;it->kind=3;it->data=data;
+        debug_direct_hits++;Item *it=&items[item_count++];strncpy(it->name,pic_names[i],8);it->type=OS_TYPE_PIC;it->kind=3;it->data=data;
       }
     }
     /* Some OS builds expose background images under a nonstandard type ID.
        Fall back to the reserved variable names while walking the VAT. */
     entry=os_GetSymTablePtr();
     while(item_count<MAX_ITEMS && (entry=os_NextSymEntry(entry,&raw_type,&name_len,found,&data))!=NULL){
+      debug_symbols++;
+      if(name_len>0&&name_len<=8&&(upper_ascii(found[0])=='I'||upper_ascii(found[0])=='P')){
+        found[name_len]=0;strncpy(debug_last_name,found,8);debug_last_name[8]=0;debug_last_type=(uint8_t)raw_type;
+      }
       if(name_len>8||(!is_image_slot_name(found,name_len)&&!is_pic_slot_name(found,name_len)))continue;
-      found[name_len]=0;if(item_name_exists(found))continue;
+      found[name_len]=0;debug_name_hits++;if(item_name_exists(found))continue;
       Item *it=&items[item_count++];strncpy(it->name,found,8);it->name[8]=0;it->type=(uint8_t)raw_type;it->kind=3;it->data=data;
     }
     return;
@@ -176,7 +184,15 @@ static void draw_list(void){
   for(int i=0;i<3;i++){int x=18+i*100;rect(x,37,86,21,i==tab?C_ACCENT:C_PANEL);text(tabs[i],x+17,44,i==tab?C_BG:C_DIM);}
   text("UP/DOWN SELECT   ENTER OPEN",19,68,C_DIM);
   frame(12,82,296,133,C_LINE);
-  if(!item_count){text("NO FILES IN THIS CATEGORY",37,119,C_WARN);text(tab==TAB_GIF?"ADD AN FVGF PACK MADE BY TOOL":"TRANSFER FILES TO CALCULATOR",27,139,C_DIM);}
+  if(!item_count){
+    text("NO FILES IN THIS CATEGORY",37,105,C_WARN);
+    if(tab==TAB_IMAGE){
+      text("IMAGE/PIC DIRECT LOOKUPS:",23,129,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,129);gfx_PrintUInt(debug_direct_hits,1);
+      text("IMAGE/PIC NAMES IN VAT:",23,148,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,148);gfx_PrintUInt(debug_name_hits,1);
+      text("SYMBOLS SCANNED:",23,167,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,167);gfx_PrintUInt(debug_symbols,1);
+      if(debug_last_name[0]){text("LAST I/P NAME:",23,186,C_DIM);text(debug_last_name,142,186,C_WHITE);text("TYPE",205,186,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(244,186);gfx_PrintUInt(debug_last_type,1);}
+    }else text(tab==TAB_GIF?"ADD AN FVGF PACK MADE BY TOOL":"TRANSFER FILES TO CALCULATOR",27,139,C_DIM);
+  }
   else{
     if(selected<scroll)scroll=selected;if(selected>=scroll+8)scroll=selected-7;
     for(unsigned row=0;row<8&&scroll+row<item_count;row++){
