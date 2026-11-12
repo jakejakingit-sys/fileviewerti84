@@ -146,7 +146,7 @@ static void open_image(Item *it){
   image_stride=134;
   if(data[2]==0x81)image_data=data+3;
   else if(data[0]==0x81)image_data=data+1;
-  else image_data=NULL;
+  else image_data=data; /* Some OS symbol-table pointers already start at pixels. */
   image_size=(uint16_t)(83u*image_stride*2u);image_valid=image_data!=NULL;
   strncpy(opened_name,it->name,8);opened_name[8]=0;view=VIEW_IMAGE;
 }
