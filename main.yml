@@ -1,0 +1,32 @@
+name: FILEVIEW 8XP build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CEdev
+        run: |
+          curl -fL -o "$HOME/cedev.tar.gz" \
+            https://github.com/CE-Programming/toolchain/releases/latest/download/CEdev-Linux.tar.gz
+          tar -xzf "$HOME/cedev.tar.gz" -C "$HOME"
+          echo "CEDEV=$HOME/CEdev" >> "$GITHUB_ENV"
+          echo "$HOME/CEdev/bin" >> "$GITHUB_PATH"
+      - name: Build FILEVIEW
+        run: make
+      - name: Check program size
+        run: |
+          test -s bin/FILEVIEW.8xp
+          size=$(wc -c < bin/FILEVIEW.8xp)
+          echo "FILEVIEW.8xp size: ${size} bytes"
+          if [ "$size" -gt 76800 ]; then echo "Program exceeds 75 KiB"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FILEVIEW-8XP
+          path: bin/FILEVIEW.8xp
+          if-no-files-found: error
