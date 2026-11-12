@@ -49,6 +49,21 @@ static int item_kind_for(uint8_t type,const char *name){
   (void)name; return 0;
 }
 
+static char upper_ascii(char c){return c>='a'&&c<='z'?(char)(c-'a'+'A'):c;}
+static bool is_image_slot_name(const char *name,uint24_t length){
+  if(length!=6)return false;
+  return upper_ascii(name[0])=='I'&&upper_ascii(name[1])=='M'&&upper_ascii(name[2])=='A'&&
+         upper_ascii(name[3])=='G'&&upper_ascii(name[4])=='E'&&name[5]>='0'&&name[5]<='9';
+}
+static bool is_pic_slot_name(const char *name,uint24_t length){
+  return length==4&&upper_ascii(name[0])=='P'&&upper_ascii(name[1])=='I'&&
+         upper_ascii(name[2])=='C'&&name[3]>='0'&&name[3]<='9';
+}
+static bool item_name_exists(const char *name){
+  for(unsigned i=0;i<item_count;i++)if(strcmp(items[i].name,name)==0)return true;
+  return false;
+}
+
 static void scan_items(void){
   void *entry=os_GetSymTablePtr(), *data; uint24_t raw_type,name_len; char found[16];
   item_count=0; selected=scroll=0;
@@ -65,6 +80,14 @@ static void scan_items(void){
       if(os_ChkFindSym(OS_TYPE_PIC,pic_names[i],NULL,&data)){
         Item *it=&items[item_count++];strncpy(it->name,pic_names[i],8);it->type=OS_TYPE_PIC;it->kind=3;it->data=data;
       }
+    }
+    /* Some OS builds expose background images under a nonstandard type ID.
+       Fall back to the reserved variable names while walking the VAT. */
+    entry=os_GetSymTablePtr();
+    while(item_count<MAX_ITEMS && (entry=os_NextSymEntry(entry,&raw_type,&name_len,found,&data))!=NULL){
+      if(name_len>8||(!is_image_slot_name(found,name_len)&&!is_pic_slot_name(found,name_len)))continue;
+      found[name_len]=0;if(item_name_exists(found))continue;
+      Item *it=&items[item_count++];strncpy(it->name,found,8);it->name[8]=0;it->type=(uint8_t)raw_type;it->kind=3;it->data=data;
     }
     return;
   }
