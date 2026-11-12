@@ -52,6 +52,22 @@ static int item_kind_for(uint8_t type,const char *name){
 static void scan_items(void){
   void *entry=os_GetSymTablePtr(), *data; uint24_t raw_type,name_len; char found[16];
   item_count=0; selected=scroll=0;
+  /* TI Connect creates Image Vars in the fixed Image0..Image9 slots. Look
+     these up by their OS type and exact name instead of relying on VAT order;
+     archived Image Vars are returned by os_ChkFindSym as data pointers. */
+  if(tab==TAB_IMAGE){
+    static const char *const image_names[10]={"Image0","Image1","Image2","Image3","Image4","Image5","Image6","Image7","Image8","Image9"};
+    static const char *const pic_names[10]={"Pic0","Pic1","Pic2","Pic3","Pic4","Pic5","Pic6","Pic7","Pic8","Pic9"};
+    for(unsigned i=0;i<10 && item_count<MAX_ITEMS;i++){
+      if(os_ChkFindSym(OS_TYPE_IMAGE,image_names[i],NULL,&data)){
+        Item *it=&items[item_count++];strncpy(it->name,image_names[i],8);it->type=OS_TYPE_IMAGE;it->kind=3;it->data=data;
+      }
+      if(os_ChkFindSym(OS_TYPE_PIC,pic_names[i],NULL,&data)){
+        Item *it=&items[item_count++];strncpy(it->name,pic_names[i],8);it->type=OS_TYPE_PIC;it->kind=3;it->data=data;
+      }
+    }
+    return;
+  }
   while(item_count<MAX_ITEMS && (entry=os_NextSymEntry(entry,&raw_type,&name_len,found,&data))!=NULL){
     if(!name_len || name_len>8) continue;
     found[name_len]=0;
