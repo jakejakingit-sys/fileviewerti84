@@ -14,7 +14,9 @@
 #define FVGF_W 64
 #define FVGF_H 48
 
-enum { C_BG=248, C_PANEL=249, C_LINE=250, C_TEXT=251, C_DIM=252, C_ACCENT=253, C_WARN=254, C_WHITE=255 };
+/* UI colors are selected from RGB332 instead of reserving palette slots, so
+   image pixels retain access to all 256 colors. */
+enum { C_BG=0, C_PANEL=8, C_LINE=73, C_TEXT=219, C_DIM=146, C_ACCENT=127, C_WARN=244, C_WHITE=255 };
 enum { TAB_TEXT, TAB_IMAGE, TAB_GIF };
 enum { VIEW_LIST, VIEW_TEXT, VIEW_IMAGE, VIEW_GIF, VIEW_INFO };
 typedef struct { char name[9]; uint8_t type, kind; void *data; } Item;
@@ -220,10 +222,10 @@ static void draw_image_view(void){
     /* TI CE Image Vars are 83x133 pixels, 16-bit color, stored as RGB565. */
     int ox=(320-133)/2,oy=(240-83)/2;
     for(int y=0;y<83;y++)for(int x=0;x<133;x++){
-      const uint8_t *p=image_data+((unsigned)y*image_stride+x)*2;
+      /* TI stores Image Var rows bottom-to-top. */
+      const uint8_t *p=image_data+((unsigned)(82-y)*image_stride+x)*2;
       uint16_t v=(uint16_t)(p[0]|((uint16_t)p[1]<<8));uint8_t r=(v>>11)&31,g=(v>>5)&63,b=v&31;
       uint8_t index=(uint8_t)(((r>>2)<<5)|((g>>3)<<2)|(b>>3));
-      if(index>=248)index=247;
       gfx_SetColor(index);gfx_SetPixel(ox+x,oy+y);
     }
   }else{
@@ -272,8 +274,6 @@ int main(void){
     unsigned r=(i>>5)&7,g=(i>>2)&7,b=i&3;
     palette[i]=gfx_RGBTo1555((uint8_t)(r*255/7),(uint8_t)(g*255/7),(uint8_t)(b*255/3));
   }
-  palette[C_BG]=gfx_RGBTo1555(4,8,14);palette[C_PANEL]=gfx_RGBTo1555(15,26,39);palette[C_LINE]=gfx_RGBTo1555(42,67,83);
-  palette[C_TEXT]=gfx_RGBTo1555(184,210,218);palette[C_DIM]=gfx_RGBTo1555(95,126,143);palette[C_ACCENT]=gfx_RGBTo1555(84,236,202);palette[C_WARN]=gfx_RGBTo1555(255,130,105);palette[C_WHITE]=gfx_RGBTo1555(244,250,250);
   gfx_SetPalette(palette,sizeof(palette),0);scan_items();
   while(running){draw();update();delay(1);}
   return 0;
