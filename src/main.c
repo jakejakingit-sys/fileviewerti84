@@ -25,77 +25,45 @@ static int tab=TAB_TEXT, view=VIEW_LIST, text_scroll, gif_frame, gif_clock;
 static char message[30];
 static uint8_t text_data[TEXT_CAP];
 static unsigned text_len;
-static uint8_t *image_data;
-static uint16_t image_size;
+static const uint8_t *image_data;
+static unsigned image_stride=133;
 static uint8_t gif_w,gif_h,gif_n,gif_delay;
 static uint8_t *gif_data;
 static uint16_t gif_size;
 static char opened_name[9];
-static unsigned debug_direct_hits,debug_name_hits,debug_symbols;
-static char debug_last_name[9];
-static uint8_t debug_last_type;
+static unsigned debug_image_hits,debug_symbols;
 static bool last_up,last_down,last_left,last_right,last_enter,last_clear;
 static bool running=true;
+static bool dirty=true;      /* redraw only when something changed (drawing an image pixel-by-pixel is slow) */
 
 static void rect(int x,int y,int w,int h,uint8_t c){gfx_SetColor(c);gfx_FillRectangle(x,y,w,h);}
 static void frame(int x,int y,int w,int h,uint8_t c){gfx_SetColor(c);gfx_Rectangle(x,y,w,h);}
 static void text(const char*s,int x,int y,uint8_t c){gfx_SetTextFGColor(c);gfx_PrintStringXY(s,x,y);}
 static void set_message(const char*s){strncpy(message,s,sizeof(message)-1);message[sizeof(message)-1]=0;}
 
-static int item_kind_for(uint8_t type,const char *name){
+static int item_kind_for(uint8_t type){
   if(tab==TAB_TEXT){
     if(type==OS_TYPE_STR || type==OS_TYPE_PRGM || type==OS_TYPE_PROT_PRGM || type==OS_TYPE_TMP_PRGM) return 1;
     if(type==OS_TYPE_APPVAR) return 2;
-  } else if(tab==TAB_IMAGE){
-    if(type==OS_TYPE_PIC || type==OS_TYPE_IMAGE) return 3;
   } else if(tab==TAB_GIF && type==OS_TYPE_APPVAR) return 4;
-  (void)name; return 0;
-}
-
-static char upper_ascii(char c){return c>='a'&&c<='z'?(char)(c-'a'+'A'):c;}
-static bool is_image_slot_name(const char *name,uint24_t length){
-  if(length!=6)return false;
-  return upper_ascii(name[0])=='I'&&upper_ascii(name[1])=='M'&&upper_ascii(name[2])=='A'&&
-         upper_ascii(name[3])=='G'&&upper_ascii(name[4])=='E'&&name[5]>='0'&&name[5]<='9';
-}
-static bool is_pic_slot_name(const char *name,uint24_t length){
-  return length==4&&upper_ascii(name[0])=='P'&&upper_ascii(name[1])=='I'&&
-         upper_ascii(name[2])=='C'&&name[3]>='0'&&name[3]<='9';
-}
-static bool item_name_exists(const char *name){
-  for(unsigned i=0;i<item_count;i++)if(strcmp(items[i].name,name)==0)return true;
-  return false;
+  return 0;
 }
 
 static void scan_items(void){
   void *entry=os_GetSymTablePtr(), *data; uint24_t raw_type,name_len; char found[16];
   item_count=0; selected=scroll=0;
-  debug_direct_hits=debug_name_hits=debug_symbols=0;debug_last_name[0]=0;debug_last_type=0;
-  /* TI Connect creates Image Vars in the fixed Image0..Image9 slots. Look
-     these up by their OS type and exact name instead of relying on VAT order;
-     archived Image Vars are returned by os_ChkFindSym as data pointers. */
+  debug_image_hits=debug_symbols=0;
+  /* IMAGE VARS: the OS stores their name as two RAW BYTES (0x3C, index) - not as the letters "Image1" - so they can't be
+     found by an ASCII name. Walk the symbol table and match on the variable TYPE (0x1A) instead. */
   if(tab==TAB_IMAGE){
-    static const char *const image_names[10]={"Image0","Image1","Image2","Image3","Image4","Image5","Image6","Image7","Image8","Image9"};
-    static const char *const pic_names[10]={"Pic0","Pic1","Pic2","Pic3","Pic4","Pic5","Pic6","Pic7","Pic8","Pic9"};
-    for(unsigned i=0;i<10 && item_count<MAX_ITEMS;i++){
-      if(os_ChkFindSym(OS_TYPE_IMAGE,image_names[i],NULL,&data)){
-        debug_direct_hits++;Item *it=&items[item_count++];strncpy(it->name,image_names[i],8);it->type=OS_TYPE_IMAGE;it->kind=3;it->data=data;
-      }
-      if(os_ChkFindSym(OS_TYPE_PIC,pic_names[i],NULL,&data)){
-        debug_direct_hits++;Item *it=&items[item_count++];strncpy(it->name,pic_names[i],8);it->type=OS_TYPE_PIC;it->kind=3;it->data=data;
-      }
-    }
-    /* Some OS builds expose background images under a nonstandard type ID.
-       Fall back to the reserved variable names while walking the VAT. */
-    entry=os_GetSymTablePtr();
     while(item_count<MAX_ITEMS && (entry=os_NextSymEntry(entry,&raw_type,&name_len,found,&data))!=NULL){
       debug_symbols++;
-      if(name_len>0&&name_len<=8&&(upper_ascii(found[0])=='I'||upper_ascii(found[0])=='P')){
-        found[name_len]=0;strncpy(debug_last_name,found,8);debug_last_name[8]=0;debug_last_type=(uint8_t)raw_type;
-      }
-      if(name_len>8||(!is_image_slot_name(found,name_len)&&!is_pic_slot_name(found,name_len)))continue;
-      found[name_len]=0;debug_name_hits++;if(item_name_exists(found))continue;
-      Item *it=&items[item_count++];strncpy(it->name,found,8);it->name[8]=0;it->type=(uint8_t)raw_type;it->kind=3;it->data=data;
+      if((uint8_t)raw_type!=OS_TYPE_IMAGE) continue;
+      debug_image_hits++;
+      unsigned idx=(name_len>=2)?(uint8_t)found[1]:0;          /* index byte: 0 -> Image1 ... 8 -> Image9, 9 -> Image0 */
+      Item *it=&items[item_count++];
+      memcpy(it->name,"Image",5); it->name[5]=(char)('0'+((idx+1)%10)); it->name[6]=0;
+      it->type=OS_TYPE_IMAGE; it->kind=3; it->data=data;
     }
     return;
   }
@@ -106,7 +74,7 @@ static void scan_items(void){
        below 'A'; ignore those just like CEdev's variable-browser example. */
     if(found[0]<'A')continue;
     uint8_t type=(uint8_t)raw_type;
-    int kind=item_kind_for(type,found);
+    int kind=item_kind_for(type);
     if(!kind || strcmp(found,"FILEVIEW")==0) continue;
     if(tab==TAB_TEXT && kind==2){
       uint8_t slot=ti_OpenVar(found,"r",OS_TYPE_APPVAR); if(!slot)continue;
@@ -146,11 +114,18 @@ static void load_text(Item *it){
   ti_Close(slot); text_scroll=0;strncpy(opened_name,it->name,8);opened_name[8]=0;view=VIEW_TEXT;
 }
 
+/* Image var layout (per Cemetech's format notes): [2-byte size][0x81][pixels]. Pixels are RGB565, little-endian, 83 rows; the row
+   stride is worked out from the size instead of assumed (it may be 133 or 134 pixels). The pointer from the symbol table points at
+   the size word, so skip the 3-byte header; accept a bare 0x81 start too. */
 static void open_image(Item *it){
-  /* Image Vars are OS variables, not AppVars/programs, so fileioc slots are
-     not the right reader. os_NextSymEntry supplied their archived data ptr. */
-  image_data=(uint8_t*)it->data;image_size=(uint16_t)(83u*133u*2u);
-  if(!image_data){set_message("CANNOT OPEN IMAGE");view=VIEW_INFO;return;}
+  const uint8_t *d=(const uint8_t*)it->data;
+  if(!d){set_message("CANNOT OPEN IMAGE");view=VIEW_INFO;return;}
+  unsigned sz=d[0]|((unsigned)d[1]<<8);
+  image_stride=133;
+  if(sz>=20000 && sz<30000 && d[2]==0x81){ image_stride=(sz-1)/2/83; d+=3; }
+  else if(d[0]==0x81) d+=1;
+  if(image_stride<133||image_stride>140) image_stride=133;
+  image_data=d;
   strncpy(opened_name,it->name,8);opened_name[8]=0;view=VIEW_IMAGE;
 }
 
@@ -187,10 +162,9 @@ static void draw_list(void){
   if(!item_count){
     text("NO FILES IN THIS CATEGORY",37,105,C_WARN);
     if(tab==TAB_IMAGE){
-      text("IMAGE/PIC DIRECT LOOKUPS:",23,129,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,129);gfx_PrintUInt(debug_direct_hits,1);
-      text("IMAGE/PIC NAMES IN VAT:",23,148,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,148);gfx_PrintUInt(debug_name_hits,1);
-      text("SYMBOLS SCANNED:",23,167,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,167);gfx_PrintUInt(debug_symbols,1);
-      if(debug_last_name[0]){text("LAST I/P NAME:",23,186,C_DIM);text(debug_last_name,142,186,C_WHITE);text("TYPE",205,186,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(244,186);gfx_PrintUInt(debug_last_type,1);}
+      text("IMAGE VARS FOUND:",23,139,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,139);gfx_PrintUInt(debug_image_hits,1);
+      text("SYMBOLS SCANNED:",23,158,C_DIM);gfx_SetTextFGColor(C_WHITE);gfx_SetTextXY(210,158);gfx_PrintUInt(debug_symbols,1);
+      text("SEND IMAGES WITH TI CONNECT CE",27,185,C_DIM);
     }else text(tab==TAB_GIF?"ADD AN FVGF PACK MADE BY TOOL":"TRANSFER FILES TO CALCULATOR",27,139,C_DIM);
   }
   else{
@@ -200,7 +174,7 @@ static void draw_list(void){
       if(idx==selected)rect(17,y-1,286,14,C_PANEL);
       text(items[idx].name,24,y,idx==selected?C_WHITE:C_DIM);
       if(tab==TAB_TEXT)text(items[idx].kind==2?"TEXT APPVAR":"PROGRAM/STRING",118,y,C_DIM);
-      else if(tab==TAB_IMAGE)text(items[idx].type==OS_TYPE_PIC?"PICTURE":"IMAGE",180,y,C_DIM);
+      else if(tab==TAB_IMAGE)text("IMAGE",180,y,C_DIM);
       else text("ANIMATION",183,y,C_DIM);
     }
   }
@@ -219,26 +193,16 @@ static void draw_text_view(void){
 static void draw_image_view(void){
   background();text(opened_name,12,39,C_ACCENT);text("CLEAR: BACK",235,39,C_DIM);
   frame(15,61,290,145,C_LINE);
-  if(image_data&&image_size>=83u*133u*2u&&image_size<83u*133u*2u+8){
-    /* TI CE Image Vars are 83x133 pixels, 16-bit color, stored as RGB565. */
-    const uint16_t *pixels=(const uint16_t*)image_data;
-    int ox=(320-133)/2,oy=(240-83)/2;
+  if(image_data){
+    int ox=(320-133)/2,oy=61+(145-83)/2;
     for(int y=0;y<83;y++)for(int x=0;x<133;x++){
-      uint16_t v=pixels[y*133+x];uint8_t r=(v>>11)&31,g=(v>>5)&63,b=v&31;
-      uint8_t index=(uint8_t)(((r>>2)<<5)|((g>>3)<<2)|(b>>3));
+      const uint8_t *q=image_data+((unsigned)y*image_stride+(unsigned)x)*2;
+      uint16_t v=(uint16_t)(q[0]|(q[1]<<8));                          /* RGB565, little-endian */
+      uint8_t r=(v>>11)&31,g=(v>>5)&63,b=v&31;
+      uint8_t index=(uint8_t)(((r>>2)<<5)|((g>>3)<<2)|(b>>3));        /* squeeze to your 3-3-2 palette */
+      if(index>=C_BG)index=C_BG-1;                                    /* 248..255 are the UI colours */
       gfx_SetColor(index);gfx_SetPixel(ox+x,oy+y);
     }
-  }else if(image_data&&image_size>=10&&memcmp(image_data,"FVIM",4)==0){
-    int w=image_data[4],h=image_data[5];unsigned need=(unsigned)w*h;
-    if(w&&h&&w<=120&&h<=100&&image_size>=need+6){
-      int ox=(320-w)/2,oy=75+(100-h)/2;
-      for(int y=0;y<h;y++)for(int x=0;x<w;x++){gfx_SetColor(image_data[6+y*w+x]);gfx_SetPixel(ox+x,oy+y);}
-    }else text("INVALID FVIM IMAGE",82,128,C_WARN);
-  }else{
-    text("TI PICTURE FOUND",98,104,C_ACCENT);
-    text("THIS PICTURE FORMAT IS NOT YET",38,125,C_TEXT);
-    text("SUPPORTED FOR PIXEL PREVIEW.",43,139,C_TEXT);
-    text("IMAGE VARS DISPLAY ABOVE.",61,163,C_DIM);
   }
   text("IMAGES",12,222,C_ACCENT);
 }
@@ -263,10 +227,11 @@ static void update(void){
   bool enter=(kb_Data[6]&kb_Enter)!=0,clear=(kb_Data[6]&kb_Clear)!=0;
   bool edge_left=left&&!last_left,edge_right=right&&!last_right,edge_up=u&&!last_up,edge_down=d&&!last_down,edge_enter=enter&&!last_enter,edge_clear=clear&&!last_clear;
   last_left=left;last_right=right;last_up=u;last_down=d;last_enter=enter;last_clear=clear;
+  if(edge_left||edge_right||edge_up||edge_down||edge_enter||edge_clear) dirty=true;
   if(view!=VIEW_LIST){
     if(edge_clear){view=VIEW_LIST;scan_items();return;}
     if(view==VIEW_TEXT){if(edge_up&&text_scroll>0)text_scroll--;if(edge_down)text_scroll++;}
-    if(view==VIEW_GIF){if(edge_left&&gif_frame>0)gif_frame--;if(edge_right&&gif_frame+1<gif_n)gif_frame++;if(++gif_clock>=gif_delay){gif_clock=0;gif_frame=(gif_frame+1)%gif_n;}}
+    if(view==VIEW_GIF){if(edge_left&&gif_frame>0)gif_frame--;if(edge_right&&gif_frame+1<gif_n)gif_frame++;if(++gif_clock>=gif_delay){gif_clock=0;gif_frame=(gif_frame+1)%gif_n;}dirty=true;}
     return;
   }
   if(edge_clear){gfx_End();running=false;return;}
@@ -286,6 +251,6 @@ int main(void){
   palette[C_BG]=gfx_RGBTo1555(4,8,14);palette[C_PANEL]=gfx_RGBTo1555(15,26,39);palette[C_LINE]=gfx_RGBTo1555(42,67,83);
   palette[C_TEXT]=gfx_RGBTo1555(184,210,218);palette[C_DIM]=gfx_RGBTo1555(95,126,143);palette[C_ACCENT]=gfx_RGBTo1555(84,236,202);palette[C_WARN]=gfx_RGBTo1555(255,130,105);palette[C_WHITE]=gfx_RGBTo1555(244,250,250);
   gfx_SetPalette(palette,sizeof(palette),0);scan_items();
-  while(running){draw();update();delay(1);}
+  while(running){if(dirty){draw();dirty=false;}update();delay(1);}
   return 0;
 }
